@@ -1,15 +1,36 @@
 #include <nds.h>
 #include <stdio.h>
+#include "sintable.h"
 
-const int CurveCount = 256;
-const int CurveStep = 4;
-const int Iterations = 256;
-const float Pi = 3.1415926535;
-const float Ang1inc = CurveStep * 2 * Pi / 235;
-const float Ang2inc = CurveStep;
+#define CURVECOUNT 256
+#define CURVESTEP 4
+#define ITERATIONS 256
+#define SIZE 96
+#define SCREENWIDTH 256
+#define SCREENHEIGHT 192
+#define PI 3.1415926535897932384626433832795
+#define SINTABLEPOWER 14
+#define SINTABLEENTRIES (1<<SINTABLEPOWER)
+#define ANG1INC (s32)((CURVESTEP * SINTABLEENTRIES) / 235)
+#define ANG2INC (s32)((CURVESTEP * SINTABLEENTRIES) / (2*PI))
+#define SCALEMUL (s32)(SIZE*PI)
+
+s16 SinTable[SINTABLEENTRIES + SINTABLEENTRIES/4];
+s16* CosTable = SinTable + SINTABLEENTRIES/4;
+
+void ExpandSinTable()
+{
+    for (int i = 0; i < SINTABLEENTRIES/4; ++i)
+    {
+        SinTable[i] = SinTable[SINTABLEENTRIES/2 - i - 1] = SinTable[SINTABLEENTRIES + i] = compactsintable[i];
+        SinTable[SINTABLEENTRIES/2 + i] = SinTable[SINTABLEENTRIES - i - 1] = -compactsintable[i];
+    }
+}
 
 int main(void)
 {
+    ExpandSinTable();
+
 	videoSetMode(MODE_5_2D); 
     vramSetBankA(VRAM_A_MAIN_BG_0x06000000);
     vramSetBankB(VRAM_B_MAIN_BG_0x06020000);
@@ -27,28 +48,28 @@ int main(void)
     cpuStartTiming(0);
 	while(true)
 	{
-        dmaFillWords(0, buffer, 256*196*2);
+        dmaFillWords(0, buffer, SCREENWIDTH*SCREENHEIGHT*2);
 
-        float time = (float)frame / 1000;
-        float ang1Start = time;
-        float ang2Start = time;
+        s32 time = frame * (1<<SINTABLEPOWER) / 1000;
+        s32 ang1Start = time;
+        s32 ang2Start = time;
 
-        for (int i = 0; i < CurveCount; i += CurveStep)
+        for (int i = 0; i < CURVECOUNT; i += CURVESTEP)
         {
-            float x = 0, y = 0;
-            for (int j = 0; j < Iterations; ++j)
+            s32 x = 0, y = 0;
+            for (int j = 0; j < ITERATIONS; ++j)
             {
-                float a = ang1Start + x;
-                float b = ang2Start + y;
-                x = sinLerp(a * DEGREES_IN_CIRCLE / (2*Pi)) / (float)(1<<12) + sinLerp(b * DEGREES_IN_CIRCLE / (2*Pi)) / (float)(1<<12);
-                y = cosLerp(a * DEGREES_IN_CIRCLE / (2*Pi)) / (float)(1<<12) + cosLerp(b * DEGREES_IN_CIRCLE / (2*Pi)) / (float)(1<<12);
-                int pX = (int)(x * 48) + 128;
-                int pY = (int)(y * 48) + 98;
-                buffer[pY * 256 + pX] = 0xFFFF;
+                const s32 sinoffset1 = (ang1Start + x)&(SINTABLEENTRIES-1);
+                const s32 sinoffset2 = (ang2Start + y)&(SINTABLEENTRIES-1);
+                x = SinTable[sinoffset1] + SinTable[sinoffset2];
+                y = CosTable[sinoffset1] + CosTable[sinoffset2];
+                const s32 pX = ((x * SCALEMUL) >> SINTABLEPOWER) + (SCREENWIDTH/2);
+                const s32 pY = ((y * SCALEMUL) >> SINTABLEPOWER) + (SCREENHEIGHT/2);
+                buffer[pY*SCREENWIDTH + pX] = 0xFFFF;
             }
 
-            ang1Start += Ang1inc;
-            ang2Start += Ang2inc;
+            ang1Start += ANG1INC;
+            ang2Start += ANG2INC;
         }
 
 		swiWaitForVBlank();
