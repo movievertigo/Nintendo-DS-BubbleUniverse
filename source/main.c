@@ -16,6 +16,8 @@
 #define SCALEMUL (s32)(SIZE*PI)
 
 s32 SinTable[SINTABLEENTRIES];
+u16 ColourTable[ITERATIONS*CURVECOUNT/CURVESTEP];
+u16 WidthTable[SCREENHEIGHT];
 
 void ExpandSinTable()
 {
@@ -30,9 +32,35 @@ void ExpandSinTable()
     }
 }
 
+void InitColourTable()
+{
+    int colourIndex = 0;
+    for (int i = 0; i < CURVECOUNT; i += CURVESTEP)
+    {
+        const s32 red = (i >> 3)|BIT(15);
+        for (int j = 0; j < ITERATIONS; ++j)
+        {
+            const s32 green = j >> 3;
+            const s32 blue = (62-(red+green))>>1;
+            ColourTable[colourIndex++] = red + (green<<5) + (blue<<10);
+        }
+    }
+}
+
+void InitWidthTable()
+{
+    for (int y = 0; y < SCREENHEIGHT; ++y)
+    {
+        int widthSquared =  (SIZE+2)*(SIZE+2) - ((SCREENHEIGHT/2)-y)*((SCREENHEIGHT/2)-y);
+        WidthTable[y] = widthSquared > 0 ? sqrt32(widthSquared)*4: 0;
+    }
+}
+
 int main(void)
 {
     ExpandSinTable();
+    InitColourTable();
+    InitWidthTable();
 
 	videoSetMode(MODE_5_2D); 
     vramSetBankA(VRAM_A_MAIN_BG_0x06000000);
@@ -55,7 +83,16 @@ int main(void)
         bgSetMapBase(bgId, phase ? 0 : 8);
         u16* buffer = phase ? buffer2 : buffer1;
 
-        dmaFillWords(0, buffer, SCREENWIDTH*SCREENHEIGHT*2);
+        u16* row = buffer;
+        for (u32 y = 0; y < SCREENHEIGHT; ++y)
+        {
+            if (WidthTable[y] > 0)
+            {
+                dmaFillWords(0, row + (SCREENWIDTH*2 - WidthTable[y])/4, WidthTable[y]);
+
+            }
+            row += SCREENWIDTH;
+        }
 
         s32 time = frame * (1<<SINTABLEPOWER) / 1000;
         s32 ang1Start = time;
@@ -63,11 +100,11 @@ int main(void)
 
         u16* screenCentre = buffer + (SCREENWIDTH + SCREENWIDTH*SCREENHEIGHT) / 2;
 
-        for (int i = 0; i < CURVECOUNT; i += CURVESTEP)
+        u16* colourPtr = ColourTable;
+        for (u32 i = 0; i < CURVECOUNT; i += CURVESTEP)
         {
-            const s32 red = (i >> 3)|BIT(15);
             s32 x = 0, y = 0;
-            for (int j = 0; j < ITERATIONS; ++j)
+            for (u32 j = 0; j < ITERATIONS; ++j)
             {
                 const s32 values1 = SinTable[(ang1Start + x)&(SINTABLEENTRIES-1)];
                 const s32 values2 = SinTable[(ang2Start + y)&(SINTABLEENTRIES-1)];
@@ -75,9 +112,7 @@ int main(void)
                 y = (values1>>16) + (values2>>16);
                 const s32 pX = (x * SCALEMUL) >> SINTABLEPOWER;
                 const s32 pY = (y * SCALEMUL) >> SINTABLEPOWER;
-                const s32 green = j >> 3;
-                const s32 blue = (62-(red+green))>>1;
-                screenCentre[pY*SCREENWIDTH + pX] = red + (green<<5) + (blue<<10);
+                screenCentre[pY*SCREENWIDTH + pX] = *colourPtr++;
             }
 
             ang1Start += ANG1INC;
