@@ -17,12 +17,23 @@
 #define ANG2INC (s32)((CURVESTEP * SINTABLEENTRIES) / (2*PI))
 #define SCALEMUL (s32)(SIZE*PI)
 
+#define PRINTCHAR(x) *textCursor++ = (x)-32
+#define PRINTDIGIT(x) *textCursor++ = (x)+16
+
+bool trails = false;
 s32 speed = 32;
 s32 oldSpeed = 0;
 
 s32 SinTable[SINTABLEENTRIES];
 u16 ColourTable[ITERATIONS*CURVECOUNT/CURVESTEP];
 u16 WidthTable[SCREENHEIGHT];
+
+PrintConsole* console;
+u16* textBase;
+u16* textCursor;
+u16* speedCursorPos;
+u16* statsCursorPos;
+u16* vsyncCursorPos;
 
 void ExpandSinTable()
 {
@@ -66,18 +77,43 @@ void InitConsole()
 	videoSetModeSub(MODE_0_2D);	
 	vramSetBankC(VRAM_C_SUB_BG); 
 
-	PrintConsole *console = consoleInit(0,0, BgType_Text8bpp, BgSize_T_256x256, 8, 0, false, false);
+	console = consoleInit(0,0, BgType_Text8bpp, BgSize_T_256x256, 8, 0, false, false);
 
 	ConsoleFont font;
 	font.gfx = (u16*)fontTiles;
 	font.pal = (u16*)fontPal;
 	font.numChars = 256-32;
-	font.numColors =  fontPalLen / 2;
+	font.numColors = fontPalLen / 2;
 	font.bpp = 8;
 	font.asciiOffset = 32;
 	font.convertSingleColor = false;
 	
 	consoleSetFont(console, &font);
+
+    textBase = console->fontBgMap;
+    textCursor = textBase;
+}
+
+void printNumber(s32 number)
+{
+    if (number < 0)
+    {
+        PRINTCHAR('-');
+        number = -number;
+    }
+
+    u32 divisor = 1;
+    while (number >= divisor*10)
+    {
+        divisor *= 10;
+    }
+    
+    while (divisor > 0)
+    {
+        PRINTDIGIT(number/divisor);
+        number %= divisor;
+        divisor /= 10;
+    }
 }
 
 int main(void)
@@ -102,18 +138,23 @@ int main(void)
         "\n"
         "     D-pad : Speed control\n"
         "         A : Pause/Unpause\n"
+        "         X : Toggle trails\n"
         "\n\n"
         " Particles : %d\n"
-        "     Speed : \x1b[s\n"
+        "     Speed : %ld\n"
         "\n"
-        "       CPU :\n"
+        "     Frame :\n"
         "     Vsync :\n"
-        "\n\n\n\n\n\n\n"
+        "\n\n\n\n\n\n"
         "        By Movie Vertigo\n"
         "    youtube.com/movievertigo\n"
         "    twitter.com/movievertigo",
-        ITERATIONS * CURVECOUNT / CURVESTEP
+        ITERATIONS * CURVECOUNT / CURVESTEP,
+        speed
     );
+    speedCursorPos = textBase + 32*10  + 13;
+    statsCursorPos = textBase + 32*12 + 13;
+    vsyncCursorPos = textBase + 32*13 + 13;
 
 	int bgId = bgInit(3, BgType_Bmp16, BgSize_B16_256x256, 0, 0);
     bool phase = false;
@@ -126,14 +167,17 @@ int main(void)
 	while(true)
 	{
         phase = !phase;
-        bgSetMapBase(bgId, phase ? 0 : 8);
-        u16* buffer = phase ? buffer2 : buffer1;
+        bgSetMapBase(bgId, phase | trails ? 0 : 8);
+        u16* buffer = phase & !trails ? buffer2 : buffer1;
 
-        u16* row = buffer + (SCREENWIDTH>>1);
-        for (u32 y = 0; y < SCREENHEIGHT; ++y)
+        if (!trails)
         {
-            dmaFillWords(0, row - (WidthTable[y]>>2), WidthTable[y]);
-            row += SCREENWIDTH;
+            u16* row = buffer + (SCREENWIDTH>>1);
+            for (u32 y = 0; y < SCREENHEIGHT; ++y)
+            {
+                dmaFillWords(0, row - (WidthTable[y]>>2), WidthTable[y]);
+                row += SCREENWIDTH;
+            }
         }
 
         s32 ang1Start = animationTime;
@@ -164,7 +208,16 @@ int main(void)
 		swiWaitForVBlank();
         u32 usecvsync = timerTicks2usec(cpuGetTiming()-startTime);
         startTime = cpuGetTiming();
-        iprintf("\x1b[u%ld  \x1b[u\x1b[2B%ldms %ldfps\x1b[u\x1b[3B%ldms %ldfps\n", speed, usec/1000, 1000000/usec, usecvsync/1000, 1000000/usecvsync);
+
+        textCursor = speedCursorPos;
+        printNumber(speed);
+        PRINTCHAR(' ');
+        textCursor = statsCursorPos;
+        printNumber(usec/1000); PRINTCHAR('m'); PRINTCHAR('s'); PRINTCHAR(' ');
+        printNumber((1000000+(usec>>1))/usec); PRINTCHAR('f'); PRINTCHAR('p'); PRINTCHAR('s');
+        textCursor = vsyncCursorPos;
+        printNumber(usecvsync/1000); PRINTCHAR('m'); PRINTCHAR('s'); PRINTCHAR(' ');
+        printNumber((1000000+(usecvsync>>1))/usecvsync); PRINTCHAR('f'); PRINTCHAR('p'); PRINTCHAR('s');
 
 		scanKeys();
 		int pressed = keysDownRepeat();
@@ -182,6 +235,11 @@ int main(void)
             {
                 speed = oldSpeed;
             }
+        }
+        if(pressed & KEY_X)
+        {
+            trails = !trails;
+            phase = false;
         }
 
         animationTime += speed;
