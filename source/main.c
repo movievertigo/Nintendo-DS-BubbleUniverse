@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include "sintable.h"
 
+#include "font.h"
+
 #define CURVECOUNT 256
 #define CURVESTEP 4
 #define ITERATIONS 256
@@ -14,6 +16,9 @@
 #define ANG1INC (s32)((CURVESTEP * SINTABLEENTRIES) / 235)
 #define ANG2INC (s32)((CURVESTEP * SINTABLEENTRIES) / (2*PI))
 #define SCALEMUL (s32)(SIZE*PI)
+
+s32 speed = 32;
+s32 oldSpeed = 0;
 
 s32 SinTable[SINTABLEENTRIES];
 u16 ColourTable[ITERATIONS*CURVECOUNT/CURVESTEP];
@@ -56,49 +61,85 @@ void InitWidthTable()
     }
 }
 
+void InitConsole()
+{
+	videoSetModeSub(MODE_0_2D);	
+	vramSetBankC(VRAM_C_SUB_BG); 
+
+	PrintConsole *console = consoleInit(0,0, BgType_Text8bpp, BgSize_T_256x256, 8, 0, false, false);
+
+	ConsoleFont font;
+	font.gfx = (u16*)fontTiles;
+	font.pal = (u16*)fontPal;
+	font.numChars = 256-32;
+	font.numColors =  fontPalLen / 2;
+	font.bpp = 8;
+	font.asciiOffset = 32;
+	font.convertSingleColor = false;
+	
+	consoleSetFont(console, &font);
+}
+
 int main(void)
 {
     ExpandSinTable();
     InitColourTable();
     InitWidthTable();
+    InitConsole();
 
 	videoSetMode(MODE_5_2D); 
     vramSetBankA(VRAM_A_MAIN_BG_0x06000000);
     vramSetBankB(VRAM_B_MAIN_BG_0x06020000);
 
-	consoleDemoInit();
+    keysSetRepeat(16, 1);
 
+    for (int i = 128; i < 224; ++i)
+    {
+    	iprintf("%c",i);
+    }
+
+	iprintf(
+        "\n"
+        "     D-pad : Speed control\n"
+        "         A : Pause/Unpause\n"
+        "\n\n"
+        " Particles : %d\n"
+        "     Speed : \x1b[s\n"
+        "\n"
+        "       CPU :\n"
+        "     Vsync :\n"
+        "\n\n\n\n\n\n\n"
+        "        By Movie Vertigo\n"
+        "    youtube.com/movievertigo\n"
+        "    twitter.com/movievertigo",
+        ITERATIONS * CURVECOUNT / CURVESTEP
+    );
 
 	int bgId = bgInit(3, BgType_Bmp16, BgSize_B16_256x256, 0, 0);
     bool phase = false;
     u16* buffer1 = bgGetGfxPtr(bgId);
     u16* buffer2 = bgGetGfxPtr(bgId) + 256*256;
 
-    int frame = 0;
+    s32 animationTime = 0;
+    u32 startTime = 0;
     cpuStartTiming(0);
 	while(true)
 	{
-		swiWaitForVBlank();
         phase = !phase;
         bgSetMapBase(bgId, phase ? 0 : 8);
         u16* buffer = phase ? buffer2 : buffer1;
 
-        u16* row = buffer;
+        u16* row = buffer + (SCREENWIDTH>>1);
         for (u32 y = 0; y < SCREENHEIGHT; ++y)
         {
-            if (WidthTable[y] > 0)
-            {
-                dmaFillWords(0, row + (SCREENWIDTH*2 - WidthTable[y])/4, WidthTable[y]);
-
-            }
+            dmaFillWords(0, row - (WidthTable[y]>>2), WidthTable[y]);
             row += SCREENWIDTH;
         }
 
-        s32 time = frame * (1<<SINTABLEPOWER) / 1000;
-        s32 ang1Start = time;
-        s32 ang2Start = time;
+        s32 ang1Start = animationTime;
+        s32 ang2Start = animationTime;
 
-        u16* screenCentre = buffer + (SCREENWIDTH + SCREENWIDTH*SCREENHEIGHT) / 2;
+        u16* screenCentre = buffer + ((SCREENWIDTH + SCREENWIDTH*SCREENHEIGHT)>>1);
 
         u16* colourPtr = ColourTable;
         for (u32 i = 0; i < CURVECOUNT; i += CURVESTEP)
@@ -119,10 +160,30 @@ int main(void)
             ang2Start += ANG2INC;
         }
 
-        ++frame;
-        if ((frame%60) == 0)
+        u32 usec = timerTicks2usec(cpuGetTiming()-startTime);
+		swiWaitForVBlank();
+        u32 usecvsync = timerTicks2usec(cpuGetTiming()-startTime);
+        startTime = cpuGetTiming();
+        iprintf("\x1b[u%ld  \x1b[u\x1b[2B%ldms %ldfps\x1b[u\x1b[3B%ldms %ldfps\n", speed, usec/1000, 1000000/usec, usecvsync/1000, 1000000/usecvsync);
+
+		scanKeys();
+		int pressed = keysDownRepeat();
+		if(pressed & (KEY_RIGHT|KEY_UP)) speed += 1;
+		if(pressed & (KEY_LEFT|KEY_DOWN)) speed -= 1;
+        pressed = keysDown();
+        if(pressed & KEY_A)
         {
-            iprintf("%ld\n", (u32)(cpuGetTiming()/33.514f/frame));
+            if (speed)
+            {
+                oldSpeed = speed;
+                speed = 0;
+            }
+            else
+            {
+                speed = oldSpeed;
+            }
         }
+
+        animationTime += speed;
 	}
 }
