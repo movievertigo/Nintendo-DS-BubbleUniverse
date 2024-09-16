@@ -20,13 +20,15 @@
 #define PRINTCHAR(x) *textCursor++ = (x)-32
 #define PRINTDIGIT(x) *textCursor++ = (x)+16
 
+#define UNROLLCOUNT 4
+
 bool trails = false;
 s32 speed = 32;
 s32 oldSpeed = 0;
 
 s32 SinTable[SINTABLEENTRIES];
-u16 ColourTable[ITERATIONS*CURVECOUNT/CURVESTEP];
-u16 WidthTable[SCREENHEIGHT];
+DTCM_BSS u16 ColourTable[ITERATIONS*CURVECOUNT/CURVESTEP/UNROLLCOUNT];
+DTCM_BSS u16 WidthTable[SCREENHEIGHT];
 
 PrintConsole* console;
 u16* textBase;
@@ -54,7 +56,7 @@ void InitColourTable()
     for (int i = 0; i < CURVECOUNT; i += CURVESTEP)
     {
         const s32 red = (i >> 3)|BIT(15);
-        for (int j = 0; j < ITERATIONS; ++j)
+        for (int j = 0; j < ITERATIONS; j += UNROLLCOUNT)
         {
             const s32 green = j >> 3;
             const s32 blue = (62-(red+green))>>1;
@@ -116,6 +118,15 @@ void printNumber(s32 number)
     }
 }
 
+#define UNROLL \
+    values1 = SinTable[(ang1Start + x)&(SINTABLEENTRIES-1)]; \
+    values2 = SinTable[(ang2Start + y)&(SINTABLEENTRIES-1)]; \
+    x = (s32)(s16)values1 + (s32)(s16)values2; \
+    y = (values1>>16) + (values2>>16); \
+    pX = (x * SCALEMUL) >> SINTABLEPOWER; \
+    pY = (y * SCALEMUL) >> SINTABLEPOWER; \
+    screenCentre[pY*SCREENWIDTH + pX] = *colourPtr; \
+
 int main(void)
 {
     ExpandSinTable();
@@ -162,6 +173,7 @@ int main(void)
     u16* buffer2 = bgGetGfxPtr(bgId) + 256*256;
 
     s32 animationTime = 0;
+//    animationTime = 21989; speed = 0;
     u32 startTime = 0;
     cpuStartTiming(0);
 	while(true)
@@ -189,15 +201,13 @@ int main(void)
         for (u32 i = 0; i < CURVECOUNT; i += CURVESTEP)
         {
             s32 x = 0, y = 0;
-            for (u32 j = 0; j < ITERATIONS; ++j)
+            for (u32 j = 0; j < ITERATIONS/UNROLLCOUNT; ++j)
             {
-                const s32 values1 = SinTable[(ang1Start + x)&(SINTABLEENTRIES-1)];
-                const s32 values2 = SinTable[(ang2Start + y)&(SINTABLEENTRIES-1)];
-                x = (s32)(s16)values1 + (s32)(s16)values2;
-                y = (values1>>16) + (values2>>16);
-                const s32 pX = (x * SCALEMUL) >> SINTABLEPOWER;
-                const s32 pY = (y * SCALEMUL) >> SINTABLEPOWER;
-                screenCentre[pY*SCREENWIDTH + pX] = *colourPtr++;
+                s32 values1, values2, pX, pY;
+
+                UNROLL; UNROLL; UNROLL; UNROLL;
+
+                colourPtr++;
             }
 
             ang1Start += ANG1INC;
@@ -210,8 +220,7 @@ int main(void)
         startTime = cpuGetTiming();
 
         textCursor = speedCursorPos;
-        printNumber(speed);
-        PRINTCHAR(' ');
+        printNumber(speed); PRINTCHAR(' ');
         textCursor = statsCursorPos;
         printNumber(usec/1000); PRINTCHAR('m'); PRINTCHAR('s'); PRINTCHAR(' ');
         printNumber((1000000+(usec>>1))/usec); PRINTCHAR('f'); PRINTCHAR('p'); PRINTCHAR('s');
