@@ -23,12 +23,16 @@
 #define UNROLLCOUNT 4
 
 bool trails = false;
-s32 speed = 32;
+s32 speed = 8;
 s32 oldSpeed = 0;
+bool justReset = false;
+s32 scaleMul = SCALEMUL;
+s32 xPan = 0;
+s32 yPan = 0;
+
 
 s32 SinTable[SINTABLEENTRIES];
 DTCM_BSS u16 ColourTable[ITERATIONS*CURVECOUNT/CURVESTEP/UNROLLCOUNT];
-DTCM_BSS u16 WidthTable[SCREENHEIGHT];
 
 PrintConsole* console;
 u16* textBase;
@@ -62,15 +66,6 @@ void InitColourTable()
             const s32 blue = (62-(red+green))>>1;
             ColourTable[colourIndex++] = red + (green<<5) + (blue<<10);
         }
-    }
-}
-
-void InitWidthTable()
-{
-    for (int y = 0; y < SCREENHEIGHT; ++y)
-    {
-        int widthSquared =  (SIZE+2)*(SIZE+2) - ((SCREENHEIGHT/2)-y)*((SCREENHEIGHT/2)-y);
-        WidthTable[y] = widthSquared > 0 ? sqrt32(widthSquared)*4: 0;
     }
 }
 
@@ -123,15 +118,17 @@ void printNumber(s32 number)
     values2 = SinTable[(ang2Start + y)&(SINTABLEENTRIES-1)]; \
     x = (s32)(s16)values1 + (s32)(s16)values2; \
     y = (values1>>16) + (values2>>16); \
-    pX = (x * SCALEMUL) >> SINTABLEPOWER; \
-    pY = (y * SCALEMUL) >> SINTABLEPOWER; \
-    screenCentre[pY*SCREENWIDTH + pX] = *colourPtr; \
+    pX = ((x * scaleMul) >> SINTABLEPOWER) + xPan; \
+    pY = ((y * scaleMul) >> SINTABLEPOWER) + yPan; \
+    if (pX >= -(SCREENWIDTH>>1) && pY >= -(SCREENHEIGHT>>1) && pX < (SCREENWIDTH>>1) && pY < (SCREENHEIGHT>>1)) \
+    { \
+        screenCentre[pY*SCREENWIDTH + pX] = *colourPtr; \
+    } \
 
 int main(void)
 {
     ExpandSinTable();
     InitColourTable();
-    InitWidthTable();
     InitConsole();
 
 	videoSetMode(MODE_5_2D); 
@@ -147,25 +144,29 @@ int main(void)
 
 	iprintf(
         "\n"
-        "     D-pad : Speed control\n"
-        "         A : Pause/Unpause\n"
-        "         X : Toggle trails\n"
+        "     D-pad : Move around\n"
+        "       A/B : Zoom in/out\n"
+        "       A+B : Reset view\n"
+        "       X/Y : Speed inc/dec\n"
+        "       L/R : Fast move + zoom\n"
+        "     Start : Pause/Unpause\n"
+        "    Select : Toggle trails\n"
         "\n\n"
         " Particles : %d\n"
         "     Speed : %ld\n"
         "\n"
         "     Frame :\n"
         "     Vsync :\n"
-        "\n\n\n\n\n\n"
+        "\n\n"
         "        By Movie Vertigo\n"
         "    youtube.com/movievertigo\n"
         "    twitter.com/movievertigo",
         ITERATIONS * CURVECOUNT / CURVESTEP,
         speed
     );
-    speedCursorPos = textBase + 32*10  + 13;
-    statsCursorPos = textBase + 32*12 + 13;
-    vsyncCursorPos = textBase + 32*13 + 13;
+    speedCursorPos = textBase + 32*14 + 13;
+    statsCursorPos = textBase + 32*16 + 13;
+    vsyncCursorPos = textBase + 32*17 + 13;
 
 	int bgId = bgInit(3, BgType_Bmp16, BgSize_B16_256x256, 0, 0);
     bool phase = false;
@@ -173,7 +174,7 @@ int main(void)
     u16* buffer2 = bgGetGfxPtr(bgId) + 256*256;
 
     s32 animationTime = 0;
-//    animationTime = 21989; speed = 0;
+//    animationTime = 21989; speed = 0; // Slow frame test
     u32 startTime = 0;
     cpuStartTiming(0);
 	while(true)
@@ -184,12 +185,7 @@ int main(void)
 
         if (!trails)
         {
-            u16* row = buffer + (SCREENWIDTH>>1);
-            for (u32 y = 0; y < SCREENHEIGHT; ++y)
-            {
-                dmaFillWords(0, row - (WidthTable[y]>>2), WidthTable[y]);
-                row += SCREENWIDTH;
-            }
+            dmaFillWords(0, buffer, SCREENWIDTH*SCREENHEIGHT*2);
         }
 
         s32 ang1Start = animationTime;
@@ -229,11 +225,21 @@ int main(void)
         printNumber((1000000+(usecvsync>>1))/usecvsync); PRINTCHAR('f'); PRINTCHAR('p'); PRINTCHAR('s');
 
 		scanKeys();
-		int pressed = keysDownRepeat();
-		if(pressed & (KEY_RIGHT|KEY_UP)) speed += 1;
-		if(pressed & (KEY_LEFT|KEY_DOWN)) speed -= 1;
+		int pressed = keysHeld();
+        int modSpeed = (pressed & KEY_L ? 4 : 1) + (pressed & KEY_R ? 8 : 0);
+		if(pressed & KEY_LEFT) xPan += modSpeed;
+		if(pressed & KEY_RIGHT) xPan -= modSpeed;
+		if(pressed & KEY_UP) yPan += modSpeed;
+		if(pressed & KEY_DOWN) yPan -= modSpeed;
+		if((pressed & KEY_A) && !justReset) scaleMul += modSpeed;
+		if((pressed & KEY_B) && !justReset) scaleMul -= modSpeed;
+        if(!(pressed & (KEY_A|KEY_B))) justReset = false;
+		pressed = keysDownRepeat();
+        if((pressed & KEY_A) && (pressed & KEY_B)) { scaleMul = SCALEMUL; xPan = yPan = 0; justReset = true; }
+		if(pressed & KEY_X) speed += modSpeed;
+		if(pressed & KEY_Y) speed -= modSpeed;
         pressed = keysDown();
-        if(pressed & KEY_A)
+        if(pressed & KEY_START)
         {
             if (speed)
             {
@@ -245,7 +251,7 @@ int main(void)
                 speed = oldSpeed;
             }
         }
-        if(pressed & KEY_X)
+        if(pressed & KEY_SELECT)
         {
             trails = !trails;
             phase = false;
